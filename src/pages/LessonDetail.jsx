@@ -243,6 +243,15 @@ export default function LessonDetail({ mode }) {
         </div>
         <div className="flex items-center gap-2">
           {!isNew && (
+            <Link
+              to={`/lessons/${id}/workspace`}
+              className="btn-secondary"
+              title="Chat with Claude to revise the body, pick resources, suggest scriptures"
+            >
+              ✨ Workspace
+            </Link>
+          )}
+          {!isNew && (
             <button
               type="button"
               onClick={handleExport}

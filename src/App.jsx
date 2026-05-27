@@ -6,6 +6,7 @@ import NotFound from './pages/NotFound.jsx';
 import Dashboard from './pages/Dashboard.jsx';
 import LessonList from './pages/LessonList.jsx';
 import LessonDetail from './pages/LessonDetail.jsx';
+import LessonWorkspace from './pages/LessonWorkspace.jsx';
 
 export default function App() {
   return (
@@ -22,6 +23,7 @@ export default function App() {
         <Route path="lessons" element={<LessonList />} />
         <Route path="lessons/new" element={<LessonDetail mode="new" />} />
         <Route path="lessons/:id" element={<LessonDetail mode="edit" />} />
+        <Route path="lessons/:id/workspace" element={<LessonWorkspace />} />
       </Route>
       <Route path="*" element={<NotFound />} />
     </Routes>
