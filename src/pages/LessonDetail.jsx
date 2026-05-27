@@ -16,6 +16,7 @@ import {
 } from '../lib/lessonImages';
 import { prepareImageForUpload } from '../lib/imageHelpers';
 import { downloadLessonDocx } from '../lib/exportLessonDocx';
+import LessonUses from '../components/LessonUses.jsx';
 import LoadingSpinner from '../components/LoadingSpinner.jsx';
 
 const EMPTY_DRAFT = {
@@ -458,6 +459,10 @@ export default function LessonDetail({ mode }) {
             </div>
           )}
         </div>
+      )}
+
+      {!isNew && (
+        <LessonUses lessonId={id} ownerUserId={user?.id} />
       )}
 
       {!isNew && (

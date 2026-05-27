@@ -49,6 +49,9 @@ export default function AppLayout() {
             <NavLink to="/lessons/new" className={navClass}>
               + New lesson
             </NavLink>
+            <NavLink to="/groups" className={navClass}>
+              Groups
+            </NavLink>
           </nav>
         </aside>
         <main className="flex-1 p-4 md:p-6">

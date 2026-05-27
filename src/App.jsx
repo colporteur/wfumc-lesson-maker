@@ -7,6 +7,8 @@ import Dashboard from './pages/Dashboard.jsx';
 import LessonList from './pages/LessonList.jsx';
 import LessonDetail from './pages/LessonDetail.jsx';
 import LessonWorkspace from './pages/LessonWorkspace.jsx';
+import GroupList from './pages/GroupList.jsx';
+import GroupDetail from './pages/GroupDetail.jsx';
 
 export default function App() {
   return (
@@ -24,6 +26,8 @@ export default function App() {
         <Route path="lessons/new" element={<LessonDetail mode="new" />} />
         <Route path="lessons/:id" element={<LessonDetail mode="edit" />} />
         <Route path="lessons/:id/workspace" element={<LessonWorkspace />} />
+        <Route path="groups" element={<GroupList />} />
+        <Route path="groups/:id" element={<GroupDetail />} />
       </Route>
       <Route path="*" element={<NotFound />} />
     </Routes>
