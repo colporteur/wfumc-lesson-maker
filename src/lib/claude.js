@@ -11,6 +11,7 @@
 //   - suggestThemes       — light helper for the metadata side
 
 import { callClaude } from './supabase';
+import { blobToBase64, prepareImageForUpload } from './imageHelpers';
 
 // --- low-level helpers ----------------------------------------------
 
@@ -220,6 +221,63 @@ export async function suggestScriptures({
  * blank line and the reference on its own line. Suitable for pasting
  * directly into the lesson body.
  */
+// --- PDF OCR (vision) -----------------------------------------------
+
+/**
+ * OCR a batch of page images into plain text using Claude vision.
+ *
+ * Used as the fallback when a PDF has no extractable text (scanned
+ * documents). Each pageImage is a JPEG Blob; we prepare + base64 each
+ * one and send them all in a single message asking for verbatim
+ * transcription, page by page, separated by blank lines.
+ *
+ * Caps at 20 pages per call. The PDF helper batches calls if needed
+ * and concatenates results.
+ */
+export async function transcribePdfPages(pageBlobs) {
+  if (!Array.isArray(pageBlobs) || pageBlobs.length === 0) {
+    return '';
+  }
+  const capped = pageBlobs.slice(0, 20);
+  const prepared = [];
+  for (const blob of capped) {
+    const { blob: jpeg, mediaType } = await prepareImageForUpload(blob, 1600, 0.85);
+    const data = await blobToBase64(jpeg);
+    prepared.push({ mediaType, data });
+  }
+
+  const contentBlocks = [
+    {
+      type: 'text',
+      text:
+        `Below are ${prepared.length} page image${prepared.length === 1 ? '' : 's'} ` +
+        `from a scanned Bible-study lesson document. Transcribe the text verbatim, ` +
+        `page by page. Preserve paragraph breaks. Separate pages with a blank line ` +
+        `(no "Page N" headers, no commentary). Plain text only — no markdown.`,
+    },
+  ];
+  for (let i = 0; i < prepared.length; i++) {
+    const p = prepared[i];
+    contentBlocks.push({
+      type: 'image',
+      source: { type: 'base64', media_type: p.mediaType, data: p.data },
+    });
+  }
+  contentBlocks.push({
+    type: 'text',
+    text: 'Now output the full transcribed text. No preamble.',
+  });
+
+  const response = await callClaude(
+    {
+      messages: [{ role: 'user', content: contentBlocks }],
+      max_tokens: 8000,
+    },
+    { timeoutMs: 180000 }
+  );
+  return extractText(response).trim();
+}
+
 export async function lookupScriptureNRSVUe(reference) {
   const ref = (reference || '').trim();
   if (!ref) throw new Error('No scripture reference provided.');

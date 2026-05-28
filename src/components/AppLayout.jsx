@@ -56,7 +56,7 @@ export default function AppLayout() {
               Import titles
             </NavLink>
             <NavLink to="/import-files" className={navClass}>
-              Import Word docs
+              Import files
             </NavLink>
           </nav>
         </aside>

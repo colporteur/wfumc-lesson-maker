@@ -91,6 +91,56 @@ function sanitizeDraft(draft) {
   return out;
 }
 
+/**
+ * Append additional text to a lesson's body, separated by a blank line
+ * plus a small header so the merge is visible in the body itself. Used
+ * by the bulk importer's "merge" action.
+ *
+ * Returns the updated lesson row.
+ */
+export async function appendToBody(id, additionalBody, { headerLabel } = {}) {
+  if (!id || !additionalBody) {
+    // Nothing to append — return the current row unchanged.
+    return await getLesson(id);
+  }
+  const current = await getLesson(id);
+  if (!current) throw new Error('Lesson not found');
+  const existing = (current.body || '').trim();
+  const incoming = (additionalBody || '').trim();
+  const header = headerLabel ? `--- ${headerLabel} ---\n\n` : '';
+  const combined = existing
+    ? `${existing}\n\n${header}${incoming}`
+    : `${header}${incoming}`;
+  return await updateLesson(id, { body: combined });
+}
+
+/**
+ * Replace just the body of a lesson, leaving title / scripture / themes
+ * / class notes alone. Used by the bulk importer's "replace" action.
+ */
+export async function replaceLessonBody(id, body) {
+  return await updateLesson(id, { body: body ?? '' });
+}
+
+/**
+ * Look up a lesson by exact title (case-insensitive). Returns the
+ * lesson row or null. Used by BulkImport to find a merge target.
+ */
+export async function findLessonByTitle(title) {
+  const t = (title || '').trim();
+  if (!t) return null;
+  const { data, error } = await withTimeout(
+    supabase
+      .from('lessons')
+      .select('id, title')
+      .ilike('title', t)
+      .limit(1)
+      .maybeSingle()
+  );
+  if (error) throw error;
+  return data ?? null;
+}
+
 // Convenience used by Dashboard: total + most-recent.
 export async function getLessonStats() {
   const [count, recent] = await Promise.all([

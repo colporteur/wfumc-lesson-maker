@@ -1,90 +1,124 @@
-// Bulk import of .docx lesson files.
+// Bulk import of .docx and .pdf lesson files.
 //
 // Two-stage flow:
-//   1. Pick files → parse each (mammoth: text + embedded images) →
-//      show a preview table with editable titles and per-row checkbox.
-//      Duplicate-by-title warnings come from a single up-front fetch
-//      of every existing lesson title.
-//   2. Commit selected → create lesson rows + upload each file's
-//      images via addImageToLesson, with a progress counter and a
-//      per-file failure list.
+//   1. Pick files → parse each (Word: mammoth text+images; PDF: pdfjs
+//      text with Claude-vision OCR fallback) → sniff a scripture
+//      reference from the body → show a preview table.
+//   2. Each row whose title matches an existing lesson exposes a
+//      Dupe action dropdown: merge (default) / replace / create new /
+//      skip. Commit honors the per-row action.
 
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext.jsx';
-import { createLesson, listLessons } from '../lib/lessons';
+import {
+  appendToBody,
+  createLesson,
+  findLessonByTitle,
+  listLessons,
+  replaceLessonBody,
+} from '../lib/lessons';
 import { addImageToLesson } from '../lib/lessonImages';
-import { parseDocxLesson } from '../lib/parseDocxLesson';
+import { parseLessonFile } from '../lib/parseLessonFile';
+
+// Dupe-action constants. Free-text in state, but keep them centralized.
+const ACTIONS = {
+  MERGE: 'merge',
+  REPLACE: 'replace',
+  CREATE_NEW: 'create_new',
+  SKIP: 'skip',
+};
 
 export default function BulkImport() {
   const { user } = useAuth();
   const navigate = useNavigate();
 
-  // existingTitles: lowercased set so duplicate-by-title warnings work.
-  const [existingTitles, setExistingTitles] = useState(null);
-  const [files, setFiles] = useState([]); // parsed file objects
+  // existingTitlesMap: title-lowercase → existing lesson id, so dupe
+  // rows can show the target and merge/replace can target it directly.
+  const [existingTitlesMap, setExistingTitlesMap] = useState(null);
+  const [files, setFiles] = useState([]);
   const [parsing, setParsing] = useState(false);
-  const [parseProgress, setParseProgress] = useState({ done: 0, total: 0 });
+  const [parseProgress, setParseProgress] = useState({
+    done: 0,
+    total: 0,
+    label: '',
+  });
   const [error, setError] = useState(null);
   const [committing, setCommitting] = useState(false);
   const [commitProgress, setCommitProgress] = useState({ done: 0, total: 0 });
   const [summary, setSummary] = useState(null);
 
+  // --- existing-titles fetch (for dupe detection) -------------------
+
+  const refreshExistingTitles = async () => {
+    try {
+      const rows = await listLessons({ limit: 1000 });
+      const map = new Map();
+      for (const r of rows || []) {
+        const key = (r.title || '').trim().toLowerCase();
+        if (key) map.set(key, r.id);
+      }
+      setExistingTitlesMap(map);
+    } catch (e) {
+      setError(e.message || 'Failed to load existing lessons');
+    }
+  };
+
   useEffect(() => {
-    let alive = true;
-    listLessons({ limit: 1000 })
-      .then((rows) => {
-        if (!alive) return;
-        setExistingTitles(
-          new Set(
-            (rows || [])
-              .map((r) => (r.title || '').trim().toLowerCase())
-              .filter(Boolean)
-          )
-        );
-      })
-      .catch((e) => alive && setError(e.message || 'Failed to load existing lessons'));
-    return () => {
-      alive = false;
-    };
+    refreshExistingTitles();
+    // refreshExistingTitles is stable for our purposes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // --- file picking + parsing ---------------------------------------
 
   const handleFilesPicked = async (e) => {
     const picked = Array.from(e.target.files || []);
-    // Clear the input so the same file can be re-picked if needed.
     e.target.value = '';
     if (picked.length === 0) return;
     setError(null);
     setSummary(null);
     setParsing(true);
-    setParseProgress({ done: 0, total: picked.length });
+    setParseProgress({ done: 0, total: picked.length, label: '' });
+
     const out = [];
     for (let i = 0; i < picked.length; i++) {
-      try {
-        const parsed = await parseDocxLesson(picked[i]);
-        out.push({
-          ...parsed,
-          // Per-row state — editable title and a selected flag default true.
-          editableTitle: parsed.title || '',
-          selected: !parsed.parseError,
-          status: 'pending', // 'pending' | 'creating' | 'created' | 'failed'
-          createdId: null,
-          failureMessage: '',
-        });
-      } catch (err) {
-        out.push({
-          filename: picked[i].name,
-          editableTitle: picked[i].name,
-          selected: false,
-          parseError: err?.message || String(err),
-          body: '',
-          images: [],
-          status: 'pending',
-        });
-      }
-      setParseProgress({ done: i + 1, total: picked.length });
+      const f = picked[i];
+      setParseProgress({
+        done: i,
+        total: picked.length,
+        label: f.name,
+      });
+      const parsed = await parseLessonFile(f, {
+        onOcrProgress: (info) => {
+          // Surface OCR progress under the file name so the pastor
+          // knows long PDFs aren't stuck.
+          setParseProgress({
+            done: i,
+            total: picked.length,
+            label: `${f.name} — ${info.phase}: ${info.done}/${info.total}`,
+          });
+        },
+      });
+      out.push({
+        ...parsed,
+        // Editable per-row state.
+        editableTitle: parsed.title || '',
+        editableScripture: parsed.scripture_reference || '',
+        selected: !parsed.parseError,
+        // dupeAction default depends on whether a match exists at commit
+        // time; we resolve it lazily.
+        dupeAction: ACTIONS.MERGE,
+        status: 'pending',
+        createdId: null,
+        failureMessage: '',
+      });
+      setParseProgress({
+        done: i + 1,
+        total: picked.length,
+        label: f.name,
+      });
     }
-    // Append to any previously parsed files so the pastor can pick in batches.
     setFiles((prev) => [...prev, ...out]);
     setParsing(false);
   };
@@ -101,119 +135,161 @@ export default function BulkImport() {
     setFiles((prev) =>
       prev.map((f) => ({
         ...f,
-        // Don't auto-enable files that failed to parse.
         selected: value && !f.parseError,
       }))
     );
   };
 
+  // --- commit -------------------------------------------------------
+
   const handleCommit = async () => {
     if (!user?.id) return;
-    const toCreate = files
+    const toProcess = files
       .map((f, idx) => ({ f, idx }))
       .filter(({ f }) => f.selected && !f.parseError);
-    if (toCreate.length === 0) {
+    if (toProcess.length === 0) {
       setError('Nothing selected.');
       return;
     }
     setError(null);
     setCommitting(true);
-    setCommitProgress({ done: 0, total: toCreate.length });
+    setCommitProgress({ done: 0, total: toProcess.length });
 
     let createdCount = 0;
+    let mergedCount = 0;
+    let replacedCount = 0;
+    let skippedCount = 0;
     let imageCount = 0;
     const failures = [];
 
-    for (let i = 0; i < toCreate.length; i++) {
-      const { f, idx } = toCreate[i];
+    for (let i = 0; i < toProcess.length; i++) {
+      const { f, idx } = toProcess[i];
       updateFile(idx, { status: 'creating' });
+
+      const title = (f.editableTitle || '').trim() || 'Untitled lesson';
+      const scripture = (f.editableScripture || '').trim();
+      const body = f.body || '';
+      const images = f.images || [];
+
+      // Look up the existing target by title (case-insensitive).
+      let existingId = null;
       try {
-        const created = await createLesson({
-          ownerUserId: user.id,
-          draft: {
-            title: (f.editableTitle || '').trim() || 'Untitled lesson',
-            scripture_reference: '',
-            body: f.body || '',
-            themes: [],
-            class_notes: '',
-          },
-        });
-        // Upload images sequentially. If one fails we keep going so the
-        // lesson row still gets the rest.
-        let imageOk = 0;
-        for (let j = 0; j < (f.images?.length || 0); j++) {
-          const img = f.images[j];
-          try {
-            // addImageToLesson expects a File; wrap the Blob with a
-            // synthetic filename so the storage path has the right ext.
-            const ext = img.suggestedExt || 'png';
-            const file = new File(
-              [img.blob],
-              `embedded-${j + 1}.${ext}`,
-              { type: img.contentType || 'image/png' }
-            );
-            await addImageToLesson({
-              file,
-              ownerUserId: user.id,
-              lessonId: created.id,
-              sortOrder: j,
-            });
-            imageOk++;
-          } catch (imgErr) {
-            // eslint-disable-next-line no-console
-            console.warn('Image upload failed for', f.filename, imgErr);
+        const existing = await findLessonByTitle(title);
+        existingId = existing?.id ?? null;
+      } catch (e) {
+        // Non-fatal — treat as no existing.
+        // eslint-disable-next-line no-console
+        console.warn('findLessonByTitle failed', e);
+      }
+
+      const action = existingId ? f.dupeAction : ACTIONS.CREATE_NEW;
+
+      try {
+        let targetId = null;
+        if (action === ACTIONS.SKIP) {
+          skippedCount++;
+          updateFile(idx, { status: 'skipped' });
+        } else if (action === ACTIONS.MERGE && existingId) {
+          await appendToBody(existingId, body, {
+            headerLabel: `imported from ${f.filename}`,
+          });
+          targetId = existingId;
+          mergedCount++;
+          updateFile(idx, { status: 'merged', createdId: existingId });
+        } else if (action === ACTIONS.REPLACE && existingId) {
+          await replaceLessonBody(existingId, body);
+          targetId = existingId;
+          replacedCount++;
+          updateFile(idx, { status: 'replaced', createdId: existingId });
+        } else {
+          // CREATE_NEW (or fallback if existingId disappeared).
+          const created = await createLesson({
+            ownerUserId: user.id,
+            draft: {
+              title,
+              scripture_reference: scripture,
+              body,
+              themes: [],
+              class_notes: '',
+            },
+          });
+          targetId = created.id;
+          createdCount++;
+          updateFile(idx, { status: 'created', createdId: created.id });
+        }
+
+        // Upload images for merge/replace/create — but NOT for skip.
+        // Replace operates only on the body per the spec (so it doesn't
+        // silently double up someone's existing image gallery).
+        if (targetId && action !== ACTIONS.SKIP && action !== ACTIONS.REPLACE) {
+          for (let j = 0; j < images.length; j++) {
+            const img = images[j];
+            try {
+              const ext = img.suggestedExt || 'png';
+              const file = new File(
+                [img.blob],
+                `embedded-${j + 1}.${ext}`,
+                { type: img.contentType || 'image/png' }
+              );
+              await addImageToLesson({
+                file,
+                ownerUserId: user.id,
+                lessonId: targetId,
+                sortOrder: j,
+              });
+              imageCount++;
+            } catch (imgErr) {
+              // eslint-disable-next-line no-console
+              console.warn('Image upload failed for', f.filename, imgErr);
+            }
           }
         }
-        imageCount += imageOk;
-        createdCount++;
-        updateFile(idx, {
-          status: 'created',
-          createdId: created.id,
-        });
       } catch (e) {
         const message = e?.message || String(e);
-        failures.push({ filename: f.filename, message });
+        failures.push({ filename: f.filename, action, message });
         updateFile(idx, {
           status: 'failed',
           failureMessage: message,
         });
       }
-      setCommitProgress({ done: i + 1, total: toCreate.length });
+      setCommitProgress({ done: i + 1, total: toProcess.length });
     }
 
     setCommitting(false);
-    setSummary({ createdCount, imageCount, failures });
-    // Refresh duplicate set so subsequent imports in the same session
-    // catch the just-created titles.
-    try {
-      const rows = await listLessons({ limit: 1000 });
-      setExistingTitles(
-        new Set(
-          (rows || [])
-            .map((r) => (r.title || '').trim().toLowerCase())
-            .filter(Boolean)
-        )
-      );
-    } catch {
-      // Non-fatal — existing-set is a UX nicety.
-    }
+    setSummary({
+      createdCount,
+      mergedCount,
+      replacedCount,
+      skippedCount,
+      imageCount,
+      failures,
+    });
+    await refreshExistingTitles();
   };
+
+  // --- derived ------------------------------------------------------
+
+  const dupesInList = useMemo(() => {
+    if (!existingTitlesMap) return new Set();
+    const out = new Set();
+    for (let i = 0; i < files.length; i++) {
+      const key = (files[i].editableTitle || '').trim().toLowerCase();
+      if (key && existingTitlesMap.has(key)) out.add(i);
+    }
+    return out;
+  }, [files, existingTitlesMap]);
 
   const counts = useMemo(() => {
     const total = files.length;
     const selected = files.filter((f) => f.selected).length;
     const errored = files.filter((f) => f.parseError).length;
-    const dupes = files.filter(
-      (f) =>
-        existingTitles &&
-        (f.editableTitle || '').trim() &&
-        existingTitles.has((f.editableTitle || '').trim().toLowerCase())
-    ).length;
+    const dupes = dupesInList.size;
     const totalImages = files
       .filter((f) => f.selected)
       .reduce((acc, f) => acc + (f.images?.length || 0), 0);
-    return { total, selected, errored, dupes, totalImages };
-  }, [files, existingTitles]);
+    const ocrPdfs = files.filter((f) => f.ocr?.used).length;
+    return { total, selected, errored, dupes, totalImages, ocrPdfs };
+  }, [files, dupesInList]);
 
   return (
     <div className="space-y-6">
@@ -225,49 +301,57 @@ export default function BulkImport() {
           ← Dashboard
         </Link>
         <h1 className="font-serif text-2xl text-umc-900">
-          Import Word doc lessons
+          Import lesson files
         </h1>
         <p className="text-sm text-gray-600 mt-1">
           Pick one or more <code className="text-xs bg-gray-100 px-1 rounded">.docx</code>{' '}
-          files. Each becomes a new lesson — title from filename, body
-          from the document text, and embedded images uploaded to the
-          lesson's gallery. You can edit each title before importing.
-          Lessons with a matching title already in your library get a
-          warning.
+          or <code className="text-xs bg-gray-100 px-1 rounded">.pdf</code>{' '}
+          files. Each becomes a lesson — title from filename, body from
+          the document text, scripture sniffed from the first lines when
+          recognizable, embedded images uploaded (Word only). Scanned
+          PDFs are OCR'd by Claude vision. Titles that already exist let
+          you merge, replace, create new, or skip per row.
         </p>
       </div>
 
       <div className="card space-y-3">
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-3 flex-wrap">
           <label className="btn-secondary cursor-pointer">
             <input
               type="file"
-              accept=".docx"
+              accept=".docx,.pdf"
               multiple
               onChange={handleFilesPicked}
               className="hidden"
             />
-            + Pick .docx files
+            + Pick .docx / .pdf files
           </label>
           {parsing && (
             <span className="text-xs text-gray-500">
               Parsing {parseProgress.done} of {parseProgress.total}…
+              {parseProgress.label && (
+                <span className="text-gray-400 ml-1">
+                  ({parseProgress.label})
+                </span>
+              )}
             </span>
           )}
           {!parsing && files.length > 0 && (
             <span className="text-xs text-gray-500">
               {counts.total} parsed · {counts.selected} selected ·{' '}
               {counts.totalImages} image{counts.totalImages === 1 ? '' : 's'}
+              {counts.ocrPdfs > 0 && (
+                <> · {counts.ocrPdfs} PDF{counts.ocrPdfs === 1 ? '' : 's'} OCR'd</>
+              )}
               {counts.errored > 0 && (
                 <> · <span className="text-red-600">{counts.errored} failed</span></>
               )}
               {counts.dupes > 0 && (
                 <>
                   {' '}
-                  ·{' '}
-                  <span className="text-amber-700">
-                    {counts.dupes} duplicate title
-                    {counts.dupes === 1 ? '' : 's'}
+                  · <span className="text-amber-700">
+                    {counts.dupes} title match
+                    {counts.dupes === 1 ? '' : 'es'}
                   </span>
                 </>
               )}
@@ -315,17 +399,17 @@ export default function BulkImport() {
 
           <ul className="divide-y">
             {files.map((f, idx) => {
-              const isDupe =
-                existingTitles &&
-                (f.editableTitle || '').trim() &&
-                existingTitles.has(
-                  (f.editableTitle || '').trim().toLowerCase()
-                );
+              const isDupe = dupesInList.has(idx);
               return (
                 <li
                   key={idx}
                   className={`py-3 ${
-                    f.status === 'created' ? 'opacity-60' : ''
+                    f.status === 'created' ||
+                    f.status === 'merged' ||
+                    f.status === 'replaced' ||
+                    f.status === 'skipped'
+                      ? 'opacity-60'
+                      : ''
                   }`}
                 >
                   <div className="flex items-start gap-3">
@@ -333,7 +417,13 @@ export default function BulkImport() {
                       type="checkbox"
                       className="mt-1"
                       checked={f.selected}
-                      disabled={!!f.parseError || committing || f.status === 'created'}
+                      disabled={
+                        !!f.parseError ||
+                        committing ||
+                        ['created', 'merged', 'replaced', 'skipped'].includes(
+                          f.status
+                        )
+                      }
                       onChange={(e) =>
                         updateFile(idx, { selected: e.target.checked })
                       }
@@ -344,7 +434,7 @@ export default function BulkImport() {
                           type="text"
                           className="input flex-1 min-w-[200px]"
                           value={f.editableTitle}
-                          disabled={committing || f.status === 'created'}
+                          disabled={committing}
                           onChange={(e) =>
                             updateFile(idx, { editableTitle: e.target.value })
                           }
@@ -355,10 +445,35 @@ export default function BulkImport() {
                             {f.images.length === 1 ? '' : 's'}
                           </span>
                         )}
-                        {isDupe && (
-                          <span className="text-xs bg-amber-50 text-amber-800 rounded px-2 py-0.5">
-                            ⚠ title already exists
+                        {f.ocr?.used && (
+                          <span className="text-xs bg-blue-50 text-blue-800 rounded px-2 py-0.5">
+                            OCR'd ({f.ocr.pageCount}p
+                            {f.ocr.truncated ? ', truncated' : ''})
                           </span>
+                        )}
+                        {isDupe && f.status === 'pending' && (
+                          <select
+                            className="text-xs border rounded px-1 py-0.5 bg-amber-50 text-amber-900"
+                            value={f.dupeAction}
+                            disabled={committing}
+                            onChange={(e) =>
+                              updateFile(idx, {
+                                dupeAction: e.target.value,
+                              })
+                            }
+                            title="A lesson with this title already exists. Pick how to handle it."
+                          >
+                            <option value={ACTIONS.MERGE}>
+                              ⚠ merge into existing
+                            </option>
+                            <option value={ACTIONS.REPLACE}>
+                              replace existing body
+                            </option>
+                            <option value={ACTIONS.CREATE_NEW}>
+                              create new (allow dupe)
+                            </option>
+                            <option value={ACTIONS.SKIP}>skip</option>
+                          </select>
                         )}
                         {f.status === 'created' && (
                           <Link
@@ -368,12 +483,52 @@ export default function BulkImport() {
                             ✓ created — open
                           </Link>
                         )}
+                        {f.status === 'merged' && (
+                          <Link
+                            to={`/lessons/${f.createdId}`}
+                            className="text-xs text-green-700 hover:underline"
+                          >
+                            ✓ merged — open
+                          </Link>
+                        )}
+                        {f.status === 'replaced' && (
+                          <Link
+                            to={`/lessons/${f.createdId}`}
+                            className="text-xs text-green-700 hover:underline"
+                          >
+                            ✓ replaced — open
+                          </Link>
+                        )}
+                        {f.status === 'skipped' && (
+                          <span className="text-xs text-gray-500">
+                            skipped
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="text"
+                          className="input flex-1 max-w-sm text-xs"
+                          placeholder="(no scripture sniffed — optional)"
+                          value={f.editableScripture}
+                          disabled={committing}
+                          onChange={(e) =>
+                            updateFile(idx, {
+                              editableScripture: e.target.value,
+                            })
+                          }
+                        />
                       </div>
                       <p className="text-xs text-gray-500">
                         {f.filename}
                         {f.parseError && (
                           <span className="text-red-600 ml-2">
                             — {f.parseError}
+                          </span>
+                        )}
+                        {f.parseWarning && (
+                          <span className="text-amber-700 ml-2">
+                            — {f.parseWarning}
                           </span>
                         )}
                         {f.status === 'failed' && (
@@ -421,10 +576,18 @@ export default function BulkImport() {
         <div className="card space-y-2">
           <h2 className="font-serif text-lg text-umc-900">Done</h2>
           <p className="text-sm text-gray-700">
-            Created <strong>{summary.createdCount}</strong> lesson
-            {summary.createdCount === 1 ? '' : 's'}, uploaded{' '}
-            <strong>{summary.imageCount}</strong> image
-            {summary.imageCount === 1 ? '' : 's'}.
+            <strong>{summary.createdCount}</strong> created
+            {summary.mergedCount > 0 && (
+              <>, <strong>{summary.mergedCount}</strong> merged</>
+            )}
+            {summary.replacedCount > 0 && (
+              <>, <strong>{summary.replacedCount}</strong> replaced</>
+            )}
+            {summary.skippedCount > 0 && (
+              <>, <strong>{summary.skippedCount}</strong> skipped</>
+            )}
+            . <strong>{summary.imageCount}</strong> image
+            {summary.imageCount === 1 ? '' : 's'} uploaded.
           </p>
           {summary.failures.length > 0 && (
             <>
@@ -435,7 +598,7 @@ export default function BulkImport() {
               <ul className="text-xs text-red-700 list-disc list-inside">
                 {summary.failures.slice(0, 20).map((f, i) => (
                   <li key={i}>
-                    {f.filename}: {f.message}
+                    {f.filename} ({f.action}): {f.message}
                   </li>
                 ))}
               </ul>
@@ -452,9 +615,13 @@ export default function BulkImport() {
             <button
               type="button"
               onClick={() => {
-                // Clear committed rows so the pastor can keep importing.
                 setFiles((prev) =>
-                  prev.filter((f) => f.status !== 'created')
+                  prev.filter(
+                    (f) =>
+                      !['created', 'merged', 'replaced', 'skipped'].includes(
+                        f.status
+                      )
+                  )
                 );
                 setSummary(null);
               }}
