@@ -9,6 +9,7 @@ import LessonDetail from './pages/LessonDetail.jsx';
 import LessonWorkspace from './pages/LessonWorkspace.jsx';
 import GroupList from './pages/GroupList.jsx';
 import GroupDetail from './pages/GroupDetail.jsx';
+import Import from './pages/Import.jsx';
 
 export default function App() {
   return (
@@ -28,6 +29,7 @@ export default function App() {
         <Route path="lessons/:id/workspace" element={<LessonWorkspace />} />
         <Route path="groups" element={<GroupList />} />
         <Route path="groups/:id" element={<GroupDetail />} />
+        <Route path="import" element={<Import />} />
       </Route>
       <Route path="*" element={<NotFound />} />
     </Routes>

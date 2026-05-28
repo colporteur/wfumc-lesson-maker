@@ -14,6 +14,7 @@ import {
   listUsesForGroup,
 } from '../lib/lessonUses';
 import { formatPersonName } from '../lib/people';
+import { downloadGroupBackPageDocx } from '../lib/exportGroupBackPageDocx';
 import GroupQueue from '../components/GroupQueue.jsx';
 import LoadingSpinner from '../components/LoadingSpinner.jsx';
 import PersonPicker from '../components/PersonPicker.jsx';
@@ -42,6 +43,7 @@ export default function GroupDetail() {
   const [savedAt, setSavedAt] = useState(null);
   const [deleting, setDeleting] = useState(false);
   const [addingMember, setAddingMember] = useState(false);
+  const [printing, setPrinting] = useState(false);
 
   // Initial load.
   useEffect(() => {
@@ -127,6 +129,19 @@ export default function GroupDetail() {
     }
   };
 
+  const handlePrintSheet = async () => {
+    if (!group) return;
+    setPrinting(true);
+    setError(null);
+    try {
+      await downloadGroupBackPageDocx(group);
+    } catch (e) {
+      setError(e.message || 'Group sheet export failed');
+    } finally {
+      setPrinting(false);
+    }
+  };
+
   const handleAddMember = async (person) => {
     if (!person?.id || !user?.id) return;
     setAddingMember(true);
@@ -190,14 +205,25 @@ export default function GroupDetail() {
             {draft.name?.trim() || group.name}
           </h1>
         </div>
-        <button
-          type="button"
-          onClick={handleSave}
-          disabled={saving}
-          className="btn-primary disabled:opacity-50"
-        >
-          {saving ? 'Saving…' : 'Save'}
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={handlePrintSheet}
+            disabled={printing}
+            className="btn-secondary disabled:opacity-50"
+            title="Download a one-page Word doc with this group's roster, queue, and recent lessons"
+          >
+            {printing ? 'Generating…' : '⤓ Group sheet'}
+          </button>
+          <button
+            type="button"
+            onClick={handleSave}
+            disabled={saving}
+            className="btn-primary disabled:opacity-50"
+          >
+            {saving ? 'Saving…' : 'Save'}
+          </button>
+        </div>
       </div>
 
       {error && (

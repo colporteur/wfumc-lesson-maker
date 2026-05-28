@@ -52,6 +52,9 @@ export default function AppLayout() {
             <NavLink to="/groups" className={navClass}>
               Groups
             </NavLink>
+            <NavLink to="/import" className={navClass}>
+              Import titles
+            </NavLink>
           </nav>
         </aside>
         <main className="flex-1 p-4 md:p-6">
