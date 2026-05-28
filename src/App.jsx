@@ -10,6 +10,7 @@ import LessonWorkspace from './pages/LessonWorkspace.jsx';
 import GroupList from './pages/GroupList.jsx';
 import GroupDetail from './pages/GroupDetail.jsx';
 import Import from './pages/Import.jsx';
+import BulkImport from './pages/BulkImport.jsx';
 
 export default function App() {
   return (
@@ -30,6 +31,7 @@ export default function App() {
         <Route path="groups" element={<GroupList />} />
         <Route path="groups/:id" element={<GroupDetail />} />
         <Route path="import" element={<Import />} />
+        <Route path="import-files" element={<BulkImport />} />
       </Route>
       <Route path="*" element={<NotFound />} />
     </Routes>

@@ -45,8 +45,9 @@ export default defineConfig({
       },
       workbox: {
         globPatterns: ['**/*.{js,css,html,svg,png,ico,woff2}'],
-        // docx is heavy; bump the per-file cache cap so it can be precached.
-        maximumFileSizeToCacheInBytes: 5 * 1024 * 1024,
+        // docx + mammoth are both heavy; bump the per-file cache cap
+        // so they can be precached.
+        maximumFileSizeToCacheInBytes: 8 * 1024 * 1024,
       },
     }),
   ],
