@@ -7,6 +7,7 @@
 // And the symmetric "lessons used by group" is just listUsesForGroup.
 
 import { supabase, withTimeout } from './supabase';
+import { removeQueueEntryIfPresent } from './lessonQueue';
 
 /**
  * Record that a lesson was used by a group on a given date. used_on
@@ -32,6 +33,10 @@ export async function recordUse({ lessonId, groupId, ownerUserId, usedOn }) {
       .single()
   );
   if (error) throw error;
+  // Auto-pop the lesson from this group's queue if it was queued.
+  // Best-effort — failure here is logged, not thrown, so the user still
+  // sees a successful "use recorded" outcome.
+  await removeQueueEntryIfPresent({ lessonId, groupId });
   return data;
 }
 

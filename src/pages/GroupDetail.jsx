@@ -14,6 +14,7 @@ import {
   listUsesForGroup,
 } from '../lib/lessonUses';
 import { formatPersonName } from '../lib/people';
+import GroupQueue from '../components/GroupQueue.jsx';
 import LoadingSpinner from '../components/LoadingSpinner.jsx';
 import PersonPicker from '../components/PersonPicker.jsx';
 
@@ -313,6 +314,9 @@ export default function GroupDetail() {
           </ul>
         )}
       </div>
+
+      {/* Queue */}
+      <GroupQueue groupId={id} />
 
       {/* Recent uses */}
       <div className="card space-y-3">

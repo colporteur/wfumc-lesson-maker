@@ -3,8 +3,8 @@
 // Shows the rotation history for this lesson (which groups used it
 // when), and an inline form to record a new use.
 
-import { useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { useEffect, useRef, useState } from 'react';
+import { Link, useSearchParams } from 'react-router-dom';
 import { listGroups } from '../lib/lessonGroups';
 import { listUsesForLesson, recordUse, removeUse } from '../lib/lessonUses';
 
@@ -19,15 +19,23 @@ function todayIso() {
 }
 
 export default function LessonUses({ lessonId, ownerUserId }) {
+  const [searchParams, setSearchParams] = useSearchParams();
+  // Start-from-queue handoff: GroupQueue navigates here with these
+  // params so the form arrives pre-filled.
+  const queueGroupId = searchParams.get('queueGroupId') || '';
+  const queueDate = searchParams.get('queueDate') || '';
+
   const [uses, setUses] = useState([]);
   const [groups, setGroups] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
-  // Inline-form state
-  const [pickedGroupId, setPickedGroupId] = useState('');
-  const [usedOn, setUsedOn] = useState(todayIso());
+  // Inline-form state — initialized from query params if present.
+  const [pickedGroupId, setPickedGroupId] = useState(queueGroupId);
+  const [usedOn, setUsedOn] = useState(queueDate || todayIso());
   const [recording, setRecording] = useState(false);
+  const cameFromQueue = !!queueGroupId;
+  const queueParamsAppliedRef = useRef(false);
 
   useEffect(() => {
     if (!lessonId) return;
@@ -42,8 +50,9 @@ export default function LessonUses({ lessonId, ownerUserId }) {
         setUses(u);
         setGroups(g);
         // Pre-pick the first group if there's only one (common when
-        // the pastor just has one Bible study).
-        if (g.length === 1) setPickedGroupId(g[0].id);
+        // the pastor just has one Bible study) — but ONLY if we didn't
+        // arrive via the queue handoff (which already specified one).
+        if (g.length === 1 && !queueGroupId) setPickedGroupId(g[0].id);
         setLoading(false);
       })
       .catch((e) => {
@@ -54,7 +63,27 @@ export default function LessonUses({ lessonId, ownerUserId }) {
     return () => {
       alive = false;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lessonId]);
+
+  // Auto-scroll the Used by panel into view when the user arrives from
+  // a Start-from-queue handoff, so the pre-filled form is visible
+  // without the pastor having to scroll. We also clear the query params
+  // afterward so a refresh doesn't re-trigger the handoff.
+  useEffect(() => {
+    if (!cameFromQueue || queueParamsAppliedRef.current || loading) return;
+    queueParamsAppliedRef.current = true;
+    // Try to scroll the section into view.
+    const el = document.getElementById(`lesson-uses-${lessonId}`);
+    if (el && typeof el.scrollIntoView === 'function') {
+      el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+    // Strip the queue params so a manual refresh doesn't re-apply them.
+    const next = new URLSearchParams(searchParams);
+    next.delete('queueGroupId');
+    next.delete('queueDate');
+    setSearchParams(next, { replace: true });
+  }, [cameFromQueue, loading, lessonId, searchParams, setSearchParams]);
 
   const handleRecord = async (e) => {
     e?.preventDefault?.();
@@ -106,9 +135,19 @@ export default function LessonUses({ lessonId, ownerUserId }) {
   };
 
   return (
-    <div className="card space-y-3">
+    <div
+      id={`lesson-uses-${lessonId}`}
+      className={`card space-y-3 ${
+        cameFromQueue ? 'ring-2 ring-umc-700' : ''
+      }`}
+    >
       <h2 className="font-serif text-lg text-umc-900">
         Used by ({uses.length})
+        {cameFromQueue && (
+          <span className="text-xs font-normal text-umc-700 ml-2">
+            ▶ from queue — confirm + record
+          </span>
+        )}
       </h2>
 
       {error && (

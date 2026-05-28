@@ -16,6 +16,7 @@ import {
 } from '../lib/lessonImages';
 import { prepareImageForUpload } from '../lib/imageHelpers';
 import { downloadLessonDocx } from '../lib/exportLessonDocx';
+import LessonQueues from '../components/LessonQueues.jsx';
 import LessonUses from '../components/LessonUses.jsx';
 import LoadingSpinner from '../components/LoadingSpinner.jsx';
 
@@ -464,6 +465,8 @@ export default function LessonDetail({ mode }) {
       {!isNew && (
         <LessonUses lessonId={id} ownerUserId={user?.id} />
       )}
+
+      {!isNew && <LessonQueues lessonId={id} />}
 
       {!isNew && (
         <div className="card border-red-200">
